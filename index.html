@@ -165,9 +165,11 @@
   .month-band{ fill:var(--accent); opacity:0.05; }
   .month-divider{ stroke:var(--baseline); stroke-width:1; stroke-dasharray:2 3; }
   .month-tag{ font-size:11px; font-weight:700; letter-spacing:.06em; fill:var(--muted); text-transform:uppercase; }
-  .cum-bar{ fill:var(--accent); cursor:pointer; transition:filter .1s; }
-  .cum-bar:hover{ filter:brightness(1.1); }
-  .cum-bar-hit{ fill:transparent; cursor:pointer; }
+  .area-fill{ fill:url(#areaGrad); }
+  .cum-line{ fill:none; stroke:var(--accent); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+  .cum-pt{ fill:var(--surface); stroke:var(--accent); stroke-width:2; cursor:pointer; }
+  .cum-pt:hover, .cum-pt.hot{ fill:var(--accent); }
+  .cum-pt-hit{ fill:transparent; cursor:pointer; }
   .end-label{ font-size:12px; font-weight:700; fill:var(--ink); }
   .end-label-sub{ font-size:10.5px; fill:var(--muted); }
 
@@ -289,7 +291,7 @@
       <svg id="cumChart" viewBox="0 0 1080 300" preserveAspectRatio="xMidYMid meet"></svg>
     </div>
     <div class="legend-row">
-      <div class="legend-item"><span class="swatch" style="background:var(--accent)"></span>누적 매출액(원)</div>
+      <div class="legend-item"><span class="swatch line" style="background:var(--accent)"></span>누적 매출액(원)</div>
       <div class="legend-item"><span class="swatch" style="background:var(--accent);opacity:.25;border-radius:2px"></span>선택된 월 구간</div>
     </div>
   </div>
@@ -441,31 +443,22 @@
   }
   function hideTip(){ tooltip.classList.remove("show"); }
 
-  function roundedTopRectPath(x,y,w,h,r){
-    if(h<=0) return "";
-    r = Math.min(r, w/2, h);
-    return "M"+x+","+(y+h)+
-      " L"+x+","+(y+r)+
-      " Q"+x+","+y+" "+(x+r)+","+y+
-      " L"+(x+w-r)+","+y+
-      " Q"+(x+w)+","+y+" "+(x+w)+","+(y+r)+
-      " L"+(x+w)+","+(y+h)+
-      " Z";
-  }
-
   function renderCumChart(){
     var svg = document.getElementById("cumChart");
     svg.innerHTML = "";
-    var W=1080, H=300, padL=54, padR=16, padT=44, padB=30;
+    var W=1080, H=300, padL=54, padR=16, padT=34, padB=30;
     var plotW = W-padL-padR, plotH = H-padT-padB;
     var n = ORDERS.length;
-    var maxY = GRAND_TOTAL * 1.18;
-    var slot = plotW/n;
-    var barW = Math.min(46, slot*0.58);
+    var maxY = GRAND_TOTAL * 1.08;
 
-    function xCenter(i){ return padL + slot*(i+0.5); }
-    function xAt(i){ return xCenter(i); }
+    function xAt(i){ return padL + (plotW * i/(n-1)); }
     function yAt(v){ return padT + plotH - (v/maxY)*plotH; }
+
+    var defs = document.createElementNS(svgNS,"defs");
+    defs.innerHTML = '<linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">'+
+      '<stop offset="0%" stop-color="var(--accent)" stop-opacity="0.22"/>'+
+      '<stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/></linearGradient>';
+    svg.appendChild(defs);
 
     /* gridlines (4 horizontal) */
     var steps = 4;
@@ -491,8 +484,8 @@
       ORDERS.forEach(function(o,i){ if(o.month===m) idxs.push(i); });
       if(!idxs.length) return;
       var i0 = idxs[0], i1 = idxs[idxs.length-1];
-      var xStart = padL + slot*i0;
-      var xEnd = padL + slot*(i1+1);
+      var xStart = i0===0 ? padL : (xAt(i0)+xAt(i0-1))/2;
+      var xEnd = i1===n-1 ? (W-padR) : (xAt(i1)+xAt(i1+1))/2;
       if(m===currentMonth){
         var band = document.createElementNS(svgNS,"rect");
         band.setAttribute("class","month-band");
@@ -516,23 +509,32 @@
       }
     });
 
-    /* bars — each bar's height is the running cumulative total at that order */
-    var barTops = [];
+    /* area path */
+    var pts = ORDERS.map(function(o,i){ return [xAt(i), yAt(o.cum)]; });
+    var areaD = "M"+pts[0][0]+","+(padT+plotH);
+    pts.forEach(function(p){ areaD += " L"+p[0]+","+p[1]; });
+    areaD += " L"+pts[pts.length-1][0]+","+(padT+plotH)+" Z";
+    var area = document.createElementNS(svgNS,"path");
+    area.setAttribute("class","area-fill"); area.setAttribute("d",areaD);
+    svg.appendChild(area);
+
+    /* line */
+    var lineD = pts.map(function(p,i){ return (i===0?"M":"L")+p[0]+","+p[1]; }).join(" ");
+    var line = document.createElementNS(svgNS,"path");
+    line.setAttribute("class","cum-line"); line.setAttribute("d",lineD);
+    svg.appendChild(line);
+
+    /* points + hit areas */
     ORDERS.forEach(function(o,i){
-      var cx = xCenter(i);
-      var topY = yAt(o.cum);
-      var barH = (padT+plotH) - topY;
-      barTops.push([cx, topY]);
+      var cx = pts[i][0], cy = pts[i][1];
+      var pt = document.createElementNS(svgNS,"circle");
+      pt.setAttribute("class","cum-pt"); pt.setAttribute("r",4);
+      pt.setAttribute("cx",cx); pt.setAttribute("cy",cy);
+      svg.appendChild(pt);
 
-      var bar = document.createElementNS(svgNS,"path");
-      bar.setAttribute("class","cum-bar");
-      bar.setAttribute("d", roundedTopRectPath(cx-barW/2, topY, barW, barH, 4));
-      svg.appendChild(bar);
-
-      var hit = document.createElementNS(svgNS,"rect");
-      hit.setAttribute("class","cum-bar-hit");
-      hit.setAttribute("x", padL+slot*i); hit.setAttribute("y", padT);
-      hit.setAttribute("width", slot); hit.setAttribute("height", plotH);
+      var hit = document.createElementNS(svgNS,"circle");
+      hit.setAttribute("class","cum-pt-hit"); hit.setAttribute("r",14);
+      hit.setAttribute("cx",cx); hit.setAttribute("cy",cy);
       hit.addEventListener("mousemove", function(ev){
         showTip(
           '<div><b>'+dateLabel(o.date)+'</b> · '+o.product+'</div>'+
@@ -551,19 +553,17 @@
       svg.appendChild(dl);
     });
 
-    /* end label, above the last (tallest) bar */
-    var last = barTops[barTops.length-1];
+    /* end label */
+    var last = pts[pts.length-1];
     var endLbl = document.createElementNS(svgNS,"text");
     endLbl.setAttribute("class","end-label");
-    endLbl.setAttribute("text-anchor","middle");
-    endLbl.setAttribute("x", last[0]); endLbl.setAttribute("y", last[1]-24);
+    endLbl.setAttribute("x", Math.min(last[0]+8, W-padR-92)); endLbl.setAttribute("y", last[1]-10);
     endLbl.textContent = fmt(GRAND_TOTAL);
     svg.appendChild(endLbl);
     var endSub = document.createElementNS(svgNS,"text");
     endSub.setAttribute("class","end-label-sub");
-    endSub.setAttribute("text-anchor","middle");
-    endSub.setAttribute("x", last[0]); endSub.setAttribute("y", last[1]-11);
-    endSub.textContent = "누적 총액";
+    endSub.setAttribute("x", Math.min(last[0]+8, W-padR-92)); endSub.setAttribute("y", last[1]+5);
+    endSub.textContent = "8건 누적 총액";
     svg.appendChild(endSub);
   }
 
